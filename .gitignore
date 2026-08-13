@@ -1,0 +1,6 @@
+/pi-monitor
+/data/
+*.db
+*.db-shm
+*.db-wal
+
