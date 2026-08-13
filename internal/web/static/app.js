@@ -20,7 +20,7 @@ function updateCards(p){
 }
 
 function updateCoreTable(cores){
-  $('core-table').innerHTML=cores.map((v,i)=>`<tr><td>CPU${i}</td><td>${fmt(v)}%</td><td><span class="core-bar"><i style="width:${Math.max(0,Math.min(100,v))}%"></i></span></td></tr>`).join('')||'<tr><td colspan="3">WAITING FOR SECOND SAMPLE...</td></tr>';
+  $('core-table').innerHTML=cores.map((v,i)=>`<tr><td>CPU${i}</td><td>${fmt(v)}%</td><td><progress class="core-bar" max="100" value="${Math.max(0,Math.min(100,v))}"></progress></td></tr>`).join('')||'<tr><td colspan="3">WAITING FOR SECOND SAMPLE...</td></tr>';
 }
 
 async function loadSystem(){

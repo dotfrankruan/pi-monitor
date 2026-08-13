@@ -9,6 +9,7 @@ main { max-width:1440px; margin:auto; padding:18px; }
 .cards article,.charts article,.terminal-table { border:1px solid var(--dim); background:linear-gradient(145deg,var(--panel),#07110c); box-shadow:inset 0 0 18px rgba(20,100,50,.12); }
 .cards article { padding:13px 14px; min-width:0; }.cards label { color:#84a98c; display:block; font-size:10px; letter-spacing:.12em; margin-bottom:10px; }
 .cards strong { font-size:clamp(19px,2vw,30px); font-weight:500; white-space:nowrap; }.cards small { color:var(--dim); margin-left:4px; }
+#load-card strong { font-size:clamp(13px,1.25vw,19px); letter-spacing:-.05em; }
 .toolbar { display:flex; justify-content:space-between; align-items:center; margin:18px 0 10px; border-bottom:1px solid var(--grid); padding-bottom:10px; }
 button { color:var(--dim); background:transparent; border:1px solid var(--grid); font:11px inherit; padding:7px 11px; cursor:pointer; margin-right:4px; }
 button:hover,button.active { color:var(--bg); background:var(--green); border-color:var(--green); text-shadow:none; }
@@ -19,7 +20,7 @@ canvas { width:100%; height:220px; display:block; }.charts article:hover { borde
 .detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px; }
 .terminal-table { padding:13px; }.terminal-table h2 { font-size:12px; margin:0 0 10px; letter-spacing:.12em; }
 table { width:100%; border-collapse:collapse; color:#8fd3a3; text-shadow:none; } th,td { border-bottom:1px solid var(--grid); padding:7px 8px; text-align:left; font-size:11px; } th { color:var(--dim); letter-spacing:.1em; }
-.core-bar { display:inline-block; width:calc(100% - 44px); height:7px; border:1px solid var(--dim); vertical-align:middle; margin-right:6px; }.core-bar i { display:block; height:100%; background:var(--green); box-shadow:0 0 6px var(--green); }
+.core-bar { width:100%; height:8px; border:1px solid var(--dim); background:transparent; appearance:none; vertical-align:middle; }.core-bar::-webkit-progress-bar { background:transparent; }.core-bar::-webkit-progress-value { background:var(--green); box-shadow:0 0 6px var(--green); }.core-bar::-moz-progress-bar { background:var(--green); box-shadow:0 0 6px var(--green); }
 .hidden { display:none !important; } footer a { color:var(--dim); }
 footer { max-width:1440px; margin:4px auto 20px; padding:0 18px; color:#376e47; font-size:10px; letter-spacing:.1em; }
 @media(max-width:1050px){.cards{grid-template-columns:repeat(4,1fr)}}
