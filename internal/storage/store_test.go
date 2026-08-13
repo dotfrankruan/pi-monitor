@@ -92,3 +92,66 @@ func TestSQLiteParquetRoundTrip(t *testing.T) {
 		t.Fatalf("network history was not preserved: %+v", got[0].Network)
 	}
 }
+
+func TestCompactByIntervalKeepsLatestSample(t *testing.T) {
+	start := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	points := make([]metrics.Sample, 20)
+	for i := range points {
+		points[i] = metrics.Sample{Timestamp: start.Add(time.Duration(i) * 500 * time.Millisecond), Load1: float64(i) / 100}
+	}
+	got := CompactByInterval(points, 5*time.Second)
+	if len(got) != 2 || got[0].Load1 != 0.09 || got[1].Load1 != 0.19 || !got[0].Representative || !got[1].Representative {
+		t.Fatalf("unexpected compacted samples: %+v", got)
+	}
+}
+
+func TestCompactByIntervalKeepsVolatileWindow(t *testing.T) {
+	start := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	usage := 10.0
+	points := make([]metrics.Sample, 10)
+	for i := range points {
+		value := usage
+		if i == 5 {
+			value = 80
+		}
+		points[i] = metrics.Sample{Timestamp: start.Add(time.Duration(i) * 500 * time.Millisecond), CPUUsagePct: &value}
+	}
+	got := CompactByInterval(points, 5*time.Second)
+	if len(got) != len(points) {
+		t.Fatalf("volatile window lost samples: got=%d want=%d", len(got), len(points))
+	}
+	for _, point := range got {
+		if point.Representative {
+			t.Fatalf("volatile point incorrectly marked representative: %+v", point)
+		}
+	}
+}
+
+func TestPreparePersistenceCompactsExistingRowsOnce(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	start := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	points := make([]metrics.Sample, 20)
+	for i := range points {
+		points[i] = metrics.Sample{Timestamp: start.Add(time.Duration(i) * 500 * time.Millisecond), MemoryTotal: 1, DiskTotal: 1}
+	}
+	if err := store.AddBatch(context.Background(), points); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := store.PreparePersistence(context.Background(), 5*time.Second)
+	if err != nil || removed != 18 {
+		t.Fatalf("removed=%d err=%v", removed, err)
+	}
+	count, err := store.Count(context.Background())
+	if err != nil || count != 2 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	removed, err = store.PreparePersistence(context.Background(), 5*time.Second)
+	if err != nil || removed != 0 {
+		t.Fatalf("second run removed=%d err=%v", removed, err)
+	}
+}

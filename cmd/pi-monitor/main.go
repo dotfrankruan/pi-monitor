@@ -30,13 +30,14 @@ func main() {
 
 func run() error {
 	var (
-		listen         = flag.String("listen", ":49152", "HTTP listen address")
-		dataDir        = flag.String("data-dir", "./data", "SQLite and Parquet storage directory")
-		diskPath       = flag.String("disk-path", "/", "filesystem path to monitor")
-		sampleInterval = flag.Duration("sample-interval", 500*time.Millisecond, "metric sample interval")
-		flushInterval  = flag.Duration("flush-interval", time.Hour, "SQLite batch flush interval")
-		showVersion    = flag.Bool("version", false, "print version and exit")
-		verbose        = flag.Bool("verbose", false, "enable debug logs")
+		listen          = flag.String("listen", ":49152", "HTTP listen address")
+		dataDir         = flag.String("data-dir", "./data", "SQLite and Parquet storage directory")
+		diskPath        = flag.String("disk-path", "/", "filesystem path to monitor")
+		sampleInterval  = flag.Duration("sample-interval", 500*time.Millisecond, "metric sample interval")
+		flushInterval   = flag.Duration("flush-interval", time.Hour, "SQLite batch flush interval")
+		persistInterval = flag.Duration("persist-interval", 5*time.Second, "durable SQLite history resolution")
+		showVersion     = flag.Bool("version", false, "print version and exit")
+		verbose         = flag.Bool("verbose", false, "enable debug logs")
 	)
 	flag.Parse()
 	if *showVersion {
@@ -48,6 +49,9 @@ func run() error {
 	}
 	if *flushInterval < time.Second {
 		return errors.New("flush-interval must be at least 1s")
+	}
+	if *persistInterval < *sampleInterval {
+		return errors.New("persist-interval must be at least sample-interval")
 	}
 	absDataDir, err := filepath.Abs(*dataDir)
 	if err != nil {
@@ -63,9 +67,16 @@ func run() error {
 		return fmt.Errorf("open storage: %w", err)
 	}
 	defer store.Close()
+	removed, err := store.PreparePersistence(context.Background(), *persistInterval)
+	if err != nil {
+		return fmt.Errorf("prepare persistent history: %w", err)
+	}
 
 	collector := metrics.NewCollector("", "", *diskPath)
-	mon := monitor.New(collector, store, monitor.Config{SampleInterval: *sampleInterval, FlushInterval: *flushInterval}, logger)
+	mon := monitor.New(collector, store, monitor.Config{SampleInterval: *sampleInterval, FlushInterval: *flushInterval, PersistenceInterval: *persistInterval}, logger)
+	if removed > 0 {
+		logger.Info("compacted existing SQLite history", "removed_rows", removed, "resolution", *persistInterval)
+	}
 	httpServer := &http.Server{
 		Addr:              *listen,
 		Handler:           webui.New(mon, collector.SystemInfo(), logger).Handler(),
@@ -82,7 +93,7 @@ func run() error {
 	go func() { monitorDone <- mon.Run(ctx) }()
 	go func() {
 		logger.Info("Pi Monitor started", "version", version, "listen", *listen, "data_dir", absDataDir,
-			"sample_interval", *sampleInterval, "flush_interval", *flushInterval)
+			"sample_interval", *sampleInterval, "flush_interval", *flushInterval, "persist_interval", *persistInterval)
 		serverDone <- httpServer.ListenAndServe()
 	}()
 
