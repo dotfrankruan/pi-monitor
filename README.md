@@ -14,14 +14,38 @@ historical charts.
 The history toolbar includes high-resolution 1, 3 and 5 minute views as well as
 longer ranges from 15 minutes through 30 days.
 
-## Quick start
+## Quick start: Raspberry Pi
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dotfrankruan/pi-monitor/main/install.sh | sudo sh
+```
+
+Open `http://<raspberry-pi-address>:49152`. The installer downloads the latest
+Linux ARM64 release, verifies its SHA-256 checksum, creates a dedicated
+unprivileged `pi-monitor` user, installs and enables the systemd service, and
+stores history in `/var/lib/pi-monitor`. Run the same command again to upgrade;
+existing history is preserved.
+
+Optional installer settings can be placed before `sudo`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dotfrankruan/pi-monitor/main/install.sh | \
+  sudo PI_MONITOR_PORT=49153 PI_MONITOR_VERSION=v0.1.0 sh
+```
+
+Supported settings are `PI_MONITOR_PORT`, `PI_MONITOR_VERSION`,
+`PI_MONITOR_DATA_DIR`, and `PI_MONITOR_INSTALL_DIR`. For a mirror or offline
+installation, `PI_MONITOR_RELEASE_BASE` can point to a directory URL containing
+the release binary and `SHA256SUMS`, including a local `file:///...` URL.
+
+## Build from source
 
 ```sh
 go build -o pi-monitor ./cmd/pi-monitor
 ./pi-monitor
 ```
 
-Open <http://localhost:49152>. Data is stored in `./data` by default.
+Open <http://localhost:49152>. Source builds store data in `./data` by default.
 
 Run `./pi-monitor -help` for storage and sampling options.
 
