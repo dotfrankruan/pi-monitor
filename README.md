@@ -2,10 +2,12 @@
 
 A small, self-contained Raspberry Pi monitoring service written in Go.
 
-It samples CPU temperature and frequency, memory, disk, fan speed, NVMe
-temperature, load and uptime every 500 ms. Recent samples remain in memory and
-are written to SQLite in batches. Completed weeks are compacted into Parquet
-files. The built-in web UI shows live values and retro-style historical charts.
+It samples CPU temperature and frequency, total and per-core CPU usage, memory,
+disk, fan speed, optional NVMe temperature, 1/5/15-minute load averages and
+uptime every 500 ms. Recent samples remain in memory and are written to SQLite
+in batches. Completed weeks are compacted into Parquet files. The built-in web
+UI shows live values, system information, per-core tables and retro-style
+historical charts.
 
 ## Quick start
 
@@ -36,11 +38,13 @@ systemd unit listens on LAN port `49152` and writes to `/var/lib/pi-monitor`.
 Pi Monitor reads Linux `sysfs` and `/proc` directly. This avoids creating an
 external process twice a second. On Raspberry Pi systems, `vcgencmd` is used as
 a fallback for CPU temperature and frequency. Fan RPM is discovered from the
-`pwmfan` hwmon device when one is available.
+`pwmfan` hwmon device when one is available. NVMe telemetry is optional: its
+dashboard card is omitted when no NVMe temperature sensor is discovered.
 
 ## API
 
 - `GET /api/current` — latest sample
+- `GET /api/system` — hostname, model, OS, kernel and root filesystem details
 - `GET /api/stream` — live Server-Sent Events stream
 - `GET /api/history?from=<RFC3339>&to=<RFC3339>&max_points=1200`
 - `GET /healthz` — fails when telemetry is older than 10 seconds

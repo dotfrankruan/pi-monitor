@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dotfrankruan/pi-monitor/internal/metrics"
 	"github.com/dotfrankruan/pi-monitor/internal/monitor"
 )
 
@@ -19,20 +20,24 @@ var assets embed.FS
 
 type Server struct {
 	monitor *monitor.Monitor
+	system  metrics.SystemInfo
 	log     *slog.Logger
 	mux     *http.ServeMux
 }
 
-func New(mon *monitor.Monitor, logger *slog.Logger) *Server {
-	s := &Server{monitor: mon, log: logger, mux: http.NewServeMux()}
+func New(mon *monitor.Monitor, system metrics.SystemInfo, logger *slog.Logger) *Server {
+	s := &Server{monitor: mon, system: system, log: logger, mux: http.NewServeMux()}
 	static, _ := fs.Sub(assets, "static")
 	s.mux.Handle("GET /", http.FileServer(http.FS(static)))
 	s.mux.HandleFunc("GET /api/current", s.current)
+	s.mux.HandleFunc("GET /api/system", s.systemInfo)
 	s.mux.HandleFunc("GET /api/history", s.history)
 	s.mux.HandleFunc("GET /api/stream", s.stream)
 	s.mux.HandleFunc("GET /healthz", s.health)
 	return s
 }
+
+func (s *Server) systemInfo(w http.ResponseWriter, _ *http.Request) { writeJSON(w, s.system) }
 
 func (s *Server) Handler() http.Handler {
 	return securityHeaders(s.mux)

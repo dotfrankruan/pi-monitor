@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>FRANKPI // SYSTEM MONITOR</title>
+  <title>PI // SYSTEM MONITOR</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header>
-    <div><span class="prompt">root@frankpi:~$</span> ./system-monitor</div>
+    <div><span id="host-prompt" class="prompt">monitor@pi:~$</span> ./system-monitor</div>
     <div id="status" class="status waiting">● CONNECTING</div>
   </header>
 
@@ -18,9 +18,10 @@
       <article><label>CPU FREQ</label><strong id="cpu-freq">--</strong><small>MHz</small></article>
       <article><label>CPU LOAD</label><strong id="cpu-usage">--</strong><small>%</small></article>
       <article><label>MEMORY</label><strong id="memory">--</strong><small>%</small></article>
-      <article><label>ROOT DISK</label><strong id="disk">--</strong><small>%</small></article>
+      <article id="disk-card"><label>ROOT DISK</label><strong id="disk">--</strong><small>%</small></article>
       <article><label>FAN</label><strong id="fan">--</strong><small>RPM</small></article>
-      <article><label>NVME TEMP</label><strong id="nvme-temp">--</strong><small>°C</small></article>
+      <article id="nvme-card"><label>NVME TEMP</label><strong id="nvme-temp">--</strong><small>°C</small></article>
+      <article><label>LOAD AVG</label><strong id="load">--</strong><small>1/5/15m</small></article>
       <article><label>UPTIME</label><strong id="uptime">--</strong><small>days</small></article>
     </section>
 
@@ -41,10 +42,22 @@
       <article><h2>CPU <span>% / MHz÷100</span></h2><canvas id="cpu-chart"></canvas></article>
       <article><h2>UTILIZATION <span>%</span></h2><canvas id="usage-chart"></canvas></article>
       <article><h2>COOLING <span>RPM</span></h2><canvas id="fan-chart"></canvas></article>
+      <article class="wide"><h2>PER-CORE CPU UTILIZATION <span>%</span></h2><canvas id="cores-chart"></canvas></article>
+    </section>
+
+    <section class="detail-grid">
+      <article class="terminal-table">
+        <h2>CPU CORE TABLE</h2>
+        <table><thead><tr><th>CORE</th><th>CURRENT</th><th>BAR</th></tr></thead><tbody id="core-table"></tbody></table>
+      </article>
+      <article class="terminal-table">
+        <h2>SYSTEM INFORMATION</h2>
+        <table><tbody id="system-table"><tr><td colspan="2">LOADING...</td></tr></tbody></table>
+      </article>
     </section>
   </main>
 
-  <footer>PI MONITOR // 500ms TELEMETRY // SQLITE + PARQUET ARCHIVE</footer>
+  <footer>PI MONITOR // 500ms TELEMETRY // SQLITE + PARQUET ARCHIVE // <a href="https://github.com/dotfrankruan/pi-monitor">SOURCE</a></footer>
   <script src="/app.js"></script>
 </body>
 </html>

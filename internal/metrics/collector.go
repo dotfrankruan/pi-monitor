@@ -18,21 +18,24 @@ import (
 
 // Sample is one point in the monitoring time series. Optional sensors are nil.
 type Sample struct {
-	Timestamp   time.Time `json:"timestamp" parquet:"timestamp,timestamp(millisecond)"`
-	CPUTempC    *float64  `json:"cpu_temp_c,omitempty" parquet:"cpu_temp_c,optional"`
-	CPUFreqMHz  *float64  `json:"cpu_freq_mhz,omitempty" parquet:"cpu_freq_mhz,optional"`
-	CPUUsagePct *float64  `json:"cpu_usage_pct,omitempty" parquet:"cpu_usage_pct,optional"`
-	MemoryPct   float64   `json:"memory_pct" parquet:"memory_pct"`
-	MemoryUsed  uint64    `json:"memory_used_bytes" parquet:"memory_used_bytes"`
-	MemoryTotal uint64    `json:"memory_total_bytes" parquet:"memory_total_bytes"`
-	DiskPct     float64   `json:"disk_pct" parquet:"disk_pct"`
-	DiskUsed    uint64    `json:"disk_used_bytes" parquet:"disk_used_bytes"`
-	DiskTotal   uint64    `json:"disk_total_bytes" parquet:"disk_total_bytes"`
-	FanRPM      *float64  `json:"fan_rpm,omitempty" parquet:"fan_rpm,optional"`
-	FanPWMPct   *float64  `json:"fan_pwm_pct,omitempty" parquet:"fan_pwm_pct,optional"`
-	NVMeTempC   *float64  `json:"nvme_temp_c,omitempty" parquet:"nvme_temp_c,optional"`
-	Load1       float64   `json:"load_1" parquet:"load_1"`
-	UptimeSec   float64   `json:"uptime_seconds" parquet:"uptime_seconds"`
+	Timestamp       time.Time `json:"timestamp" parquet:"timestamp,timestamp(millisecond)"`
+	CPUTempC        *float64  `json:"cpu_temp_c,omitempty" parquet:"cpu_temp_c,optional"`
+	CPUFreqMHz      *float64  `json:"cpu_freq_mhz,omitempty" parquet:"cpu_freq_mhz,optional"`
+	CPUUsagePct     *float64  `json:"cpu_usage_pct,omitempty" parquet:"cpu_usage_pct,optional"`
+	CPUCoreUsagePct []float64 `json:"cpu_core_usage_pct,omitempty" parquet:"cpu_core_usage_pct,list,optional"`
+	MemoryPct       float64   `json:"memory_pct" parquet:"memory_pct"`
+	MemoryUsed      uint64    `json:"memory_used_bytes" parquet:"memory_used_bytes"`
+	MemoryTotal     uint64    `json:"memory_total_bytes" parquet:"memory_total_bytes"`
+	DiskPct         float64   `json:"disk_pct" parquet:"disk_pct"`
+	DiskUsed        uint64    `json:"disk_used_bytes" parquet:"disk_used_bytes"`
+	DiskTotal       uint64    `json:"disk_total_bytes" parquet:"disk_total_bytes"`
+	FanRPM          *float64  `json:"fan_rpm,omitempty" parquet:"fan_rpm,optional"`
+	FanPWMPct       *float64  `json:"fan_pwm_pct,omitempty" parquet:"fan_pwm_pct,optional"`
+	NVMeTempC       *float64  `json:"nvme_temp_c,omitempty" parquet:"nvme_temp_c,optional"`
+	Load1           float64   `json:"load_1" parquet:"load_1"`
+	Load5           float64   `json:"load_5" parquet:"load_5"`
+	Load15          float64   `json:"load_15" parquet:"load_15"`
+	UptimeSec       float64   `json:"uptime_seconds" parquet:"uptime_seconds"`
 }
 
 func (s Sample) MarshalJSON() ([]byte, error) {
@@ -57,7 +60,7 @@ type Collector struct {
 	freqPaths    []string
 
 	mu       sync.Mutex
-	previous *cpuTimes
+	previous map[string]cpuTimes
 }
 
 func NewCollector(procRoot, sysRoot, diskPath string) *Collector {
@@ -118,8 +121,9 @@ func (c *Collector) Collect(ctx context.Context) (Sample, error) {
 		problems = append(problems, fmt.Errorf("CPU frequency: %w", err))
 	}
 
-	if v, err := c.cpuUsage(); err == nil && v != nil {
-		s.CPUUsagePct = v
+	if total, cores, err := c.cpuUsage(); err == nil {
+		s.CPUUsagePct = total
+		s.CPUCoreUsagePct = cores
 	}
 	if used, total, err := c.memory(); err == nil {
 		s.MemoryUsed, s.MemoryTotal = used, total
@@ -146,8 +150,8 @@ func (c *Collector) Collect(ctx context.Context) (Sample, error) {
 	if v, err := readNumber(c.nvmeTempPath, 1000); err == nil {
 		s.NVMeTempC = &v
 	}
-	if v, err := firstNumber(filepath.Join(c.procRoot, "loadavg")); err == nil {
-		s.Load1 = v
+	if values, err := firstNumbers(filepath.Join(c.procRoot, "loadavg"), 3); err == nil {
+		s.Load1, s.Load5, s.Load15 = values[0], values[1], values[2]
 	}
 	if v, err := firstNumber(filepath.Join(c.procRoot, "uptime")); err == nil {
 		s.UptimeSec = v
@@ -203,48 +207,70 @@ func (c *Collector) memory() (used, total uint64, err error) {
 	return total - available, total, nil
 }
 
-func (c *Collector) cpuUsage() (*float64, error) {
+func (c *Collector) cpuUsage() (*float64, []float64, error) {
 	f, err := os.Open(filepath.Join(c.procRoot, "stat"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
-	if !scanner.Scan() {
-		return nil, errors.New("empty /proc/stat")
-	}
-	fields := strings.Fields(scanner.Text())
-	if len(fields) < 5 || fields[0] != "cpu" {
-		return nil, errors.New("invalid /proc/stat CPU row")
-	}
-	var values []uint64
-	for _, field := range fields[1:] {
-		v, parseErr := strconv.ParseUint(field, 10, 64)
-		if parseErr != nil {
-			return nil, parseErr
+	current := make(map[string]cpuTimes)
+	var order []string
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 5 || (fields[0] != "cpu" && !strings.HasPrefix(fields[0], "cpu")) {
+			break
 		}
-		values = append(values, v)
+		var values []uint64
+		for _, field := range fields[1:] {
+			v, parseErr := strconv.ParseUint(field, 10, 64)
+			if parseErr != nil {
+				return nil, nil, parseErr
+			}
+			values = append(values, v)
+		}
+		var total uint64
+		for _, v := range values {
+			total += v
+		}
+		idle := values[3]
+		if len(values) > 4 {
+			idle += values[4]
+		}
+		current[fields[0]] = cpuTimes{idle: idle, total: total}
+		order = append(order, fields[0])
 	}
-	var total uint64
-	for _, v := range values {
-		total += v
+	if err := scanner.Err(); err != nil {
+		return nil, nil, err
 	}
-	idle := values[3]
-	if len(values) > 4 {
-		idle += values[4]
+	if len(order) == 0 || order[0] != "cpu" {
+		return nil, nil, errors.New("invalid /proc/stat CPU rows")
 	}
-	current := cpuTimes{idle: idle, total: total}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	previous := c.previous
-	c.previous = &current
-	if previous == nil || total <= previous.total {
-		return nil, nil
+	c.previous = current
+	if previous == nil {
+		return nil, nil, nil
 	}
-	deltaTotal := total - previous.total
-	deltaIdle := idle - previous.idle
-	value := (1 - float64(deltaIdle)/float64(deltaTotal)) * 100
-	return &value, nil
+	usage := func(name string) *float64 {
+		before, ok := previous[name]
+		now := current[name]
+		if !ok || now.total <= before.total || now.idle < before.idle {
+			return nil
+		}
+		deltaTotal := now.total - before.total
+		value := (1 - float64(now.idle-before.idle)/float64(deltaTotal)) * 100
+		return &value
+	}
+	total := usage("cpu")
+	cores := make([]float64, 0, len(order)-1)
+	for _, name := range order[1:] {
+		if value := usage(name); value != nil {
+			cores = append(cores, *value)
+		}
+	}
+	return total, cores, nil
 }
 
 func diskUsage(path string) (used, total uint64, err error) {
@@ -282,15 +308,30 @@ func readNumber(path string, divisor float64) (float64, error) {
 }
 
 func firstNumber(path string) (float64, error) {
-	text, err := readText(path)
+	values, err := firstNumbers(path, 1)
 	if err != nil {
 		return 0, err
 	}
-	fields := strings.Fields(text)
-	if len(fields) == 0 {
-		return 0, errors.New("missing number")
+	return values[0], nil
+}
+
+func firstNumbers(path string, count int) ([]float64, error) {
+	text, err := readText(path)
+	if err != nil {
+		return nil, err
 	}
-	return strconv.ParseFloat(fields[0], 64)
+	fields := strings.Fields(text)
+	if len(fields) < count {
+		return nil, errors.New("missing number")
+	}
+	values := make([]float64, count)
+	for i := range values {
+		values[i], err = strconv.ParseFloat(fields[i], 64)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return values, nil
 }
 
 func vcgenNumber(ctx context.Context, argument, prefix, suffix string, divisor float64) (float64, error) {

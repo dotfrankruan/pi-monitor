@@ -68,7 +68,7 @@ func run() error {
 	mon := monitor.New(collector, store, monitor.Config{SampleInterval: *sampleInterval, FlushInterval: *flushInterval}, logger)
 	httpServer := &http.Server{
 		Addr:              *listen,
-		Handler:           webui.New(mon, logger).Handler(),
+		Handler:           webui.New(mon, collector.SystemInfo(), logger).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}

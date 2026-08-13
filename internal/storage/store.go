@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,10 +40,12 @@ func Open(dataDir string) (*Store, error) {
 		`CREATE TABLE IF NOT EXISTS samples (
             timestamp_ms INTEGER PRIMARY KEY,
             cpu_temp_c REAL, cpu_freq_mhz REAL, cpu_usage_pct REAL,
+			cpu_core_usage_json TEXT NOT NULL DEFAULT '[]',
             memory_pct REAL NOT NULL, memory_used_bytes INTEGER NOT NULL, memory_total_bytes INTEGER NOT NULL,
             disk_pct REAL NOT NULL, disk_used_bytes INTEGER NOT NULL, disk_total_bytes INTEGER NOT NULL,
             fan_rpm REAL, fan_pwm_pct REAL, nvme_temp_c REAL,
-            load_1 REAL NOT NULL, uptime_seconds REAL NOT NULL
+			load_1 REAL NOT NULL, load_5 REAL NOT NULL DEFAULT 0, load_15 REAL NOT NULL DEFAULT 0,
+			uptime_seconds REAL NOT NULL
         )`,
 		`CREATE INDEX IF NOT EXISTS idx_samples_timestamp ON samples(timestamp_ms)`,
 	} {
@@ -51,7 +54,45 @@ func Open(dataDir string) (*Store, error) {
 			return nil, fmt.Errorf("initialize SQLite: %w", err)
 		}
 	}
+	if err := ensureColumns(db, map[string]string{
+		"cpu_core_usage_json": "TEXT NOT NULL DEFAULT '[]'",
+		"load_5":              "REAL NOT NULL DEFAULT 0",
+		"load_15":             "REAL NOT NULL DEFAULT 0",
+	}); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate SQLite: %w", err)
+	}
 	return &Store{db: db, archiveDir: archiveDir}, nil
+}
+
+func ensureColumns(db *sql.DB, wanted map[string]string) error {
+	rows, err := db.Query(`PRAGMA table_info(samples)`)
+	if err != nil {
+		return err
+	}
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var cid int
+		var name, kind string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		existing[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for name, definition := range wanted {
+		if !existing[name] {
+			if _, err := db.Exec(`ALTER TABLE samples ADD COLUMN ` + name + ` ` + definition); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -65,16 +106,24 @@ func (s *Store) AddBatch(ctx context.Context, samples []metrics.Sample) error {
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO samples VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO samples (
+		timestamp_ms, cpu_temp_c, cpu_freq_mhz, cpu_usage_pct, cpu_core_usage_json,
+		memory_pct, memory_used_bytes, memory_total_bytes, disk_pct, disk_used_bytes, disk_total_bytes,
+		fan_rpm, fan_pwm_pct, nvme_temp_c, load_1, load_5, load_15, uptime_seconds
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, p := range samples {
+		cores, marshalErr := json.Marshal(p.CPUCoreUsagePct)
+		if marshalErr != nil {
+			return marshalErr
+		}
 		_, err = stmt.ExecContext(ctx,
-			p.Timestamp.UnixMilli(), nullable(p.CPUTempC), nullable(p.CPUFreqMHz), nullable(p.CPUUsagePct),
+			p.Timestamp.UnixMilli(), nullable(p.CPUTempC), nullable(p.CPUFreqMHz), nullable(p.CPUUsagePct), string(cores),
 			p.MemoryPct, p.MemoryUsed, p.MemoryTotal, p.DiskPct, p.DiskUsed, p.DiskTotal,
-			nullable(p.FanRPM), nullable(p.FanPWMPct), nullable(p.NVMeTempC), p.Load1, p.UptimeSec,
+			nullable(p.FanRPM), nullable(p.FanPWMPct), nullable(p.NVMeTempC), p.Load1, p.Load5, p.Load15, p.UptimeSec,
 		)
 		if err != nil {
 			return err
@@ -114,9 +163,9 @@ func (s *Store) Query(ctx context.Context, from, to time.Time, maxPoints int) ([
 }
 
 func (s *Store) querySQLite(ctx context.Context, from, to time.Time) ([]metrics.Sample, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT timestamp_ms, cpu_temp_c, cpu_freq_mhz, cpu_usage_pct,
+	rows, err := s.db.QueryContext(ctx, `SELECT timestamp_ms, cpu_temp_c, cpu_freq_mhz, cpu_usage_pct, cpu_core_usage_json,
         memory_pct, memory_used_bytes, memory_total_bytes, disk_pct, disk_used_bytes, disk_total_bytes,
-        fan_rpm, fan_pwm_pct, nvme_temp_c, load_1, uptime_seconds
+		fan_rpm, fan_pwm_pct, nvme_temp_c, load_1, load_5, load_15, uptime_seconds
         FROM samples WHERE timestamp_ms >= ? AND timestamp_ms <= ? ORDER BY timestamp_ms`, from.UnixMilli(), to.UnixMilli())
 	if err != nil {
 		return nil, err
@@ -138,15 +187,19 @@ type scanner interface{ Scan(...any) error }
 func scanSample(row scanner) (metrics.Sample, error) {
 	var p metrics.Sample
 	var timestamp int64
+	var cores string
 	var cpuTemp, cpuFreq, cpuUsage, fanRPM, fanPWM, nvmeTemp sql.NullFloat64
-	err := row.Scan(&timestamp, &cpuTemp, &cpuFreq, &cpuUsage,
+	err := row.Scan(&timestamp, &cpuTemp, &cpuFreq, &cpuUsage, &cores,
 		&p.MemoryPct, &p.MemoryUsed, &p.MemoryTotal, &p.DiskPct, &p.DiskUsed, &p.DiskTotal,
-		&fanRPM, &fanPWM, &nvmeTemp, &p.Load1, &p.UptimeSec)
+		&fanRPM, &fanPWM, &nvmeTemp, &p.Load1, &p.Load5, &p.Load15, &p.UptimeSec)
 	if err != nil {
 		return p, err
 	}
 	p.Timestamp = time.UnixMilli(timestamp).UTC()
 	p.CPUTempC, p.CPUFreqMHz, p.CPUUsagePct = pointer(cpuTemp), pointer(cpuFreq), pointer(cpuUsage)
+	if err := json.Unmarshal([]byte(cores), &p.CPUCoreUsagePct); err != nil {
+		return p, fmt.Errorf("decode per-core usage: %w", err)
+	}
 	p.FanRPM, p.FanPWMPct, p.NVMeTempC = pointer(fanRPM), pointer(fanPWM), pointer(nvmeTemp)
 	return p, nil
 }
@@ -160,35 +213,42 @@ func pointer(value sql.NullFloat64) *float64 {
 }
 
 type parquetSample struct {
-	TimestampMS int64    `parquet:"timestamp_ms,timestamp(millisecond)"`
-	CPUTempC    *float64 `parquet:"cpu_temp_c,optional"`
-	CPUFreqMHz  *float64 `parquet:"cpu_freq_mhz,optional"`
-	CPUUsagePct *float64 `parquet:"cpu_usage_pct,optional"`
-	MemoryPct   float64  `parquet:"memory_pct"`
-	MemoryUsed  int64    `parquet:"memory_used_bytes"`
-	MemoryTotal int64    `parquet:"memory_total_bytes"`
-	DiskPct     float64  `parquet:"disk_pct"`
-	DiskUsed    int64    `parquet:"disk_used_bytes"`
-	DiskTotal   int64    `parquet:"disk_total_bytes"`
-	FanRPM      *float64 `parquet:"fan_rpm,optional"`
-	FanPWMPct   *float64 `parquet:"fan_pwm_pct,optional"`
-	NVMeTempC   *float64 `parquet:"nvme_temp_c,optional"`
-	Load1       float64  `parquet:"load_1"`
-	UptimeSec   float64  `parquet:"uptime_seconds"`
+	TimestampMS     int64     `parquet:"timestamp_ms,timestamp(millisecond)"`
+	CPUTempC        *float64  `parquet:"cpu_temp_c,optional"`
+	CPUFreqMHz      *float64  `parquet:"cpu_freq_mhz,optional"`
+	CPUUsagePct     *float64  `parquet:"cpu_usage_pct,optional"`
+	CPUCoreUsagePct []float64 `parquet:"cpu_core_usage_pct,list,optional"`
+	MemoryPct       float64   `parquet:"memory_pct"`
+	MemoryUsed      int64     `parquet:"memory_used_bytes"`
+	MemoryTotal     int64     `parquet:"memory_total_bytes"`
+	DiskPct         float64   `parquet:"disk_pct"`
+	DiskUsed        int64     `parquet:"disk_used_bytes"`
+	DiskTotal       int64     `parquet:"disk_total_bytes"`
+	FanRPM          *float64  `parquet:"fan_rpm,optional"`
+	FanPWMPct       *float64  `parquet:"fan_pwm_pct,optional"`
+	NVMeTempC       *float64  `parquet:"nvme_temp_c,optional"`
+	Load1           float64   `parquet:"load_1"`
+	Load5           float64   `parquet:"load_5"`
+	Load15          float64   `parquet:"load_15"`
+	UptimeSec       float64   `parquet:"uptime_seconds"`
 }
 
 func toParquet(p metrics.Sample) parquetSample {
-	return parquetSample{p.Timestamp.UnixMilli(), p.CPUTempC, p.CPUFreqMHz, p.CPUUsagePct,
-		p.MemoryPct, int64(p.MemoryUsed), int64(p.MemoryTotal), p.DiskPct, int64(p.DiskUsed), int64(p.DiskTotal),
-		p.FanRPM, p.FanPWMPct, p.NVMeTempC, p.Load1, p.UptimeSec}
+	return parquetSample{TimestampMS: p.Timestamp.UnixMilli(), CPUTempC: p.CPUTempC,
+		CPUFreqMHz: p.CPUFreqMHz, CPUUsagePct: p.CPUUsagePct, CPUCoreUsagePct: p.CPUCoreUsagePct,
+		MemoryPct: p.MemoryPct, MemoryUsed: int64(p.MemoryUsed), MemoryTotal: int64(p.MemoryTotal),
+		DiskPct: p.DiskPct, DiskUsed: int64(p.DiskUsed), DiskTotal: int64(p.DiskTotal),
+		FanRPM: p.FanRPM, FanPWMPct: p.FanPWMPct, NVMeTempC: p.NVMeTempC,
+		Load1: p.Load1, Load5: p.Load5, Load15: p.Load15, UptimeSec: p.UptimeSec}
 }
 
 func (p parquetSample) metric() metrics.Sample {
 	return metrics.Sample{Timestamp: time.UnixMilli(p.TimestampMS).UTC(), CPUTempC: p.CPUTempC,
-		CPUFreqMHz: p.CPUFreqMHz, CPUUsagePct: p.CPUUsagePct, MemoryPct: p.MemoryPct,
+		CPUFreqMHz: p.CPUFreqMHz, CPUUsagePct: p.CPUUsagePct, CPUCoreUsagePct: p.CPUCoreUsagePct, MemoryPct: p.MemoryPct,
 		MemoryUsed: uint64(p.MemoryUsed), MemoryTotal: uint64(p.MemoryTotal), DiskPct: p.DiskPct,
 		DiskUsed: uint64(p.DiskUsed), DiskTotal: uint64(p.DiskTotal), FanRPM: p.FanRPM,
-		FanPWMPct: p.FanPWMPct, NVMeTempC: p.NVMeTempC, Load1: p.Load1, UptimeSec: p.UptimeSec}
+		FanPWMPct: p.FanPWMPct, NVMeTempC: p.NVMeTempC, Load1: p.Load1, Load5: p.Load5,
+		Load15: p.Load15, UptimeSec: p.UptimeSec}
 }
 
 func readParquetRange(path string, from, to time.Time) ([]metrics.Sample, error) {
