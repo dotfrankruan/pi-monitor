@@ -72,26 +72,40 @@ func run() error {
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx, cancel := context.WithCancel(signalCtx)
+	defer cancel()
 
-	errChannel := make(chan error, 2)
-	go func() { errChannel <- mon.Run(ctx) }()
+	monitorDone := make(chan error, 1)
+	serverDone := make(chan error, 1)
+	go func() { monitorDone <- mon.Run(ctx) }()
 	go func() {
 		logger.Info("Pi Monitor started", "version", version, "listen", *listen, "data_dir", absDataDir,
 			"sample_interval", *sampleInterval, "flush_interval", *flushInterval)
-		errChannel <- httpServer.ListenAndServe()
+		serverDone <- httpServer.ListenAndServe()
 	}()
 
 	select {
-	case <-ctx.Done():
+	case <-signalCtx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		return httpServer.Shutdown(shutdownCtx)
-	case err := <-errChannel:
+		serverErr := httpServer.Shutdown(shutdownCtx)
+		// Monitor.Run receives the same signal and flushes the pending in-memory
+		// batch. Wait for that flush before the deferred database close.
+		monitorErr := <-monitorDone
+		return errors.Join(serverErr, monitorErr)
+	case err := <-serverDone:
 		if errors.Is(err, http.ErrServerClosed) || err == nil {
 			return nil
 		}
+		cancel()
+		<-monitorDone
 		return err
+	case err := <-monitorDone:
+		cancel()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer shutdownCancel()
+		return errors.Join(err, httpServer.Shutdown(shutdownCtx))
 	}
 }
