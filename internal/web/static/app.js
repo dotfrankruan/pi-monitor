@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = { range:'1h', samples:[], charts:[], system:null };
-const ranges = { '15m':15*60e3, '1h':3600e3, '6h':6*3600e3, '24h':86400e3, '168h':7*86400e3, '720h':30*86400e3 };
+const state = { range:'1h', samples:[], charts:[], system:null, networkInterface:'', coreChart:null, networkChart:null };
+const ranges = { '1m':60e3, '3m':3*60e3, '5m':5*60e3, '15m':15*60e3, '1h':3600e3, '6h':6*3600e3, '24h':86400e3, '168h':7*86400e3, '720h':30*86400e3 };
 const fmt = (v,n=1) => v == null ? '--' : Number(v).toFixed(n);
 const bytes = v => { const units=['B','KiB','MiB','GiB','TiB']; let i=0,n=v||0; while(n>=1024&&i<4){n/=1024;i++} return `${n.toFixed(1)} ${units[i]}`; };
 
@@ -10,13 +10,26 @@ function updateCards(p){
   $('cpu-usage').textContent=fmt(p.cpu_usage_pct); $('memory').textContent=fmt(p.memory_pct);
   $('disk').textContent=fmt(p.disk_pct); $('fan').textContent=fmt(p.fan_rpm,0);
   $('nvme-temp').textContent=fmt(p.nvme_temp_c); $('uptime').textContent=fmt(p.uptime_seconds/86400,1);
-	$('load').textContent=`${fmt(p.load_1,2)}/${fmt(p.load_5,2)}/${fmt(p.load_15,2)}`;
+	if($('load-info')) $('load-info').textContent=`${fmt(p.load_1,2)} / ${fmt(p.load_5,2)} / ${fmt(p.load_15,2)} (1/5/15 min)`;
   $('memory').title=`${bytes(p.memory_used_bytes)} / ${bytes(p.memory_total_bytes)}`;
   const si=state.system||{};
   $('disk-card').title=`Used: ${bytes(p.disk_used_bytes)}\nTotal: ${bytes(p.disk_total_bytes)}\nFilesystem: ${si.disk_filesystem||'unknown'}\nDevice: ${si.disk_device||'unknown'}\nMounted at: ${si.disk_mount||'/'}`;
 	$('nvme-card').classList.toggle('hidden',p.nvme_temp_c==null);
 	updateCoreTable(p.cpu_core_usage_pct||[]);
+	updateNetwork(p);
   $('last-update').textContent=`LAST SAMPLE ${new Date(p.timestamp).toLocaleString()}`;
+}
+
+function rate(v){return `${bytes(v||0)}/s`}
+function selectedInterfaceInfo(){return (state.system?.network_interfaces||[]).find(v=>v.name===state.networkInterface)}
+function updateNetwork(p){
+  const point=(p.network||{})[state.networkInterface];
+  $('network-rx-rate').textContent=point?rate(point.rx_bytes_per_sec):'--';
+  $('network-tx-rate').textContent=point?rate(point.tx_bytes_per_sec):'--';
+  $('network-rx-total').textContent=point?bytes(point.rx_bytes):'--';
+  $('network-tx-total').textContent=point?bytes(point.tx_bytes):'--';
+  const info=selectedInterfaceInfo();
+  $('network-meta').textContent=info?`STATE ${String(info.state||'unknown').toUpperCase()}  //  MTU ${info.mtu}  //  MAC ${info.mac||'none'}  //  ADDR ${(info.addresses||[]).join(', ')||'none'}`:'NO INTERFACE DATA';
 }
 
 function updateCoreTable(cores){
@@ -28,8 +41,12 @@ async function loadSystem(){
     document.title=`${String(s.hostname||'PI').toUpperCase()} // SYSTEM MONITOR`;
     $('host-prompt').textContent=`monitor@${s.hostname||'pi'}:~$`;
     $('nvme-card').classList.toggle('hidden',!s.has_nvme_temp);
-    const rows=[['HOSTNAME',s.hostname],['MODEL',s.model||'Unknown'],['OS',s.operating_system],['KERNEL',s.kernel_version],['ARCH',s.architecture],['CPU CORES',s.cpu_cores],['ROOT DEVICE',s.disk_device||'Unknown'],['FILESYSTEM',s.disk_filesystem||'Unknown'],['MOUNT',s.disk_mount]];
+    const rows=[['HOSTNAME',s.hostname],['MODEL',s.model||'Unknown'],['OS',s.operating_system],['KERNEL',s.kernel_version],['ARCH',s.architecture],['CPU CORES',s.cpu_cores],['LOAD AVERAGE','<span id="load-info">--</span>'],['ROOT DEVICE',s.disk_device||'Unknown'],['FILESYSTEM',s.disk_filesystem||'Unknown'],['MOUNT',s.disk_mount]];
     $('system-table').innerHTML=rows.map(([k,v])=>`<tr><th>${k}</th><td>${String(v)}</td></tr>`).join('');
+		const interfaces=s.network_interfaces||[], preferred=interfaces.find(v=>v.name!=='lo'&&v.state==='up')||interfaces.find(v=>v.name!=='lo')||interfaces[0];
+		const select=$('network-select');select.replaceChildren();for(const iface of interfaces){const option=document.createElement('option');option.value=iface.name;option.textContent=`${iface.name} [${iface.state||'unknown'}]`;select.append(option)}
+		state.networkInterface=preferred?.name||'';select.value=state.networkInterface;select.onchange=()=>{state.networkInterface=select.value;if(state.samples.length)updateNetwork(state.samples.at(-1));redraw()};
+		if(state.samples.length){updateCards(state.samples.at(-1));redraw()}
   }catch(e){console.error(e)}
 }
 
@@ -56,11 +73,11 @@ function initCharts(){
     new RetroChart('thermal-chart',[{name:'CPU',color:'#54ff88',get:p=>p.cpu_temp_c},{name:'NVME',color:'#ffc857',get:p=>p.nvme_temp_c}]),
     new RetroChart('cpu-chart',[{name:'USAGE',color:'#54ff88',get:p=>p.cpu_usage_pct},{name:'FREQ/100',color:'#58a6ff',get:p=>p.cpu_freq_mhz/100}]),
     new RetroChart('usage-chart',[{name:'MEM',color:'#c084fc',get:p=>p.memory_pct},{name:'DISK',color:'#ffc857',get:p=>p.disk_pct}],100),
-		new RetroChart('fan-chart',[{name:'RPM',color:'#58a6ff',get:p=>p.fan_rpm}]),
-		new RetroChart('cores-chart',[],100)];
+		new RetroChart('fan-chart',[{name:'RPM',color:'#58a6ff',get:p=>p.fan_rpm}])];
+	state.coreChart=new RetroChart('cores-chart',[],100);state.networkChart=new RetroChart('network-chart',[{name:'RX KiB/s',color:'#54ff88',get:p=>(p.network?.[state.networkInterface]?.rx_bytes_per_sec)/1024},{name:'TX KiB/s',color:'#58a6ff',get:p=>(p.network?.[state.networkInterface]?.tx_bytes_per_sec)/1024}]);state.charts.push(state.coreChart,state.networkChart);
 }
 const coreColors=['#54ff88','#58a6ff','#ffc857','#c084fc','#ff7b72','#39d0d8','#f0883e','#a5d6ff','#7ee787','#d2a8ff','#ffa198','#e3b341','#79c0ff','#56d364','#db61a2','#b1bac4'];
-function redraw(){const count=Math.max(0,...state.samples.map(p=>(p.cpu_core_usage_pct||[]).length));state.charts.at(-1).series=Array.from({length:count},(_,i)=>({name:`CPU${i}`,color:coreColors[i%coreColors.length],get:p=>(p.cpu_core_usage_pct||[])[i]}));state.charts.forEach(c=>c.set(state.samples))}
+function redraw(){const count=Math.max(0,...state.samples.map(p=>(p.cpu_core_usage_pct||[]).length));state.coreChart.series=Array.from({length:count},(_,i)=>({name:`CPU${i}`,color:coreColors[i%coreColors.length],get:p=>(p.cpu_core_usage_pct||[])[i]}));state.charts.forEach(c=>c.set(state.samples))}
 async function loadHistory(){
   const to=new Date(),from=new Date(to-ranges[state.range]);
   try{const r=await fetch(`/api/history?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&max_points=1600`);if(!r.ok)throw Error(r.status);const d=await r.json();state.samples=d.samples||[];if(state.samples.length)updateCards(state.samples.at(-1));redraw()}catch(e){console.error(e)}

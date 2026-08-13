@@ -21,6 +21,8 @@ func TestCollectorFromFixture(t *testing.T) {
 	mustWrite(t, filepath.Join(sys, "class/hwmon/hwmon1/fan1_input"), "3025\n")
 	mustWrite(t, filepath.Join(sys, "class/hwmon/hwmon1/pwm1"), "75\n")
 	mustWrite(t, filepath.Join(sys, "devices/system/cpu/cpufreq/policy0/scaling_cur_freq"), "1700000\n")
+	mustWrite(t, filepath.Join(sys, "class/net/eth0/statistics/rx_bytes"), "1000\n")
+	mustWrite(t, filepath.Join(sys, "class/net/eth0/statistics/tx_bytes"), "2000\n")
 
 	c := NewCollector(proc, sys, root)
 	s, err := c.Collect(context.Background())
@@ -46,6 +48,8 @@ func TestCollectorFromFixture(t *testing.T) {
 		t.Fatalf("unexpected load averages: %.2f %.2f %.2f", s.Load1, s.Load5, s.Load15)
 	}
 	mustWrite(t, filepath.Join(proc, "stat"), "cpu 120 0 60 820 10 0 0 0 0 0\ncpu0 60 0 30 410 5 0 0 0 0 0\ncpu1 60 0 30 410 5 0 0 0 0 0\n")
+	mustWrite(t, filepath.Join(sys, "class/net/eth0/statistics/rx_bytes"), "1600\n")
+	mustWrite(t, filepath.Join(sys, "class/net/eth0/statistics/tx_bytes"), "2300\n")
 	s, err = c.Collect(context.Background())
 	if err != nil {
 		t.Fatalf("second Collect returned error: %v", err)
@@ -55,6 +59,9 @@ func TestCollectorFromFixture(t *testing.T) {
 	}
 	if len(s.CPUCoreUsagePct) != 2 || s.CPUCoreUsagePct[0] != 60 || s.CPUCoreUsagePct[1] != 60 {
 		t.Fatalf("unexpected per-core CPU usage: %v", s.CPUCoreUsagePct)
+	}
+	if point, ok := s.Network["eth0"]; !ok || point.RXBytes != 1600 || point.TXBytes != 2300 || point.RXBytesPerSec <= 0 || point.TXBytesPerSec <= 0 {
+		t.Fatalf("unexpected network sample: %+v", s.Network)
 	}
 }
 

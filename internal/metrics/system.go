@@ -2,25 +2,36 @@ package metrics
 
 import (
 	"bufio"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 type SystemInfo struct {
-	Hostname        string `json:"hostname"`
-	OperatingSystem string `json:"operating_system"`
-	KernelVersion   string `json:"kernel_version"`
-	Architecture    string `json:"architecture"`
-	Model           string `json:"model,omitempty"`
-	CPUCores        int    `json:"cpu_cores"`
-	DiskDevice      string `json:"disk_device,omitempty"`
-	DiskFilesystem  string `json:"disk_filesystem,omitempty"`
-	DiskMount       string `json:"disk_mount"`
-	HasFan          bool   `json:"has_fan"`
-	HasNVMeTemp     bool   `json:"has_nvme_temp"`
+	Hostname          string                 `json:"hostname"`
+	OperatingSystem   string                 `json:"operating_system"`
+	KernelVersion     string                 `json:"kernel_version"`
+	Architecture      string                 `json:"architecture"`
+	Model             string                 `json:"model,omitempty"`
+	CPUCores          int                    `json:"cpu_cores"`
+	DiskDevice        string                 `json:"disk_device,omitempty"`
+	DiskFilesystem    string                 `json:"disk_filesystem,omitempty"`
+	DiskMount         string                 `json:"disk_mount"`
+	HasFan            bool                   `json:"has_fan"`
+	HasNVMeTemp       bool                   `json:"has_nvme_temp"`
+	NetworkInterfaces []NetworkInterfaceInfo `json:"network_interfaces"`
+}
+
+type NetworkInterfaceInfo struct {
+	Name      string   `json:"name"`
+	State     string   `json:"state"`
+	MAC       string   `json:"mac,omitempty"`
+	MTU       int      `json:"mtu"`
+	Addresses []string `json:"addresses"`
 }
 
 func (c *Collector) SystemInfo() SystemInfo {
@@ -37,7 +48,27 @@ func (c *Collector) SystemInfo() SystemInfo {
 	}
 	info.OperatingSystem = readOSName(c.procRoot)
 	info.DiskDevice, info.DiskFilesystem, info.DiskMount = mountInfo(c.procRoot, c.diskPath)
+	info.NetworkInterfaces = networkInterfaces(c.sysRoot)
 	return info
+}
+
+func networkInterfaces(sysRoot string) []NetworkInterfaceInfo {
+	interfaces, _ := net.Interfaces()
+	result := make([]NetworkInterfaceInfo, 0, len(interfaces))
+	for _, iface := range interfaces {
+		info := NetworkInterfaceInfo{Name: iface.Name, MAC: iface.HardwareAddr.String(), MTU: iface.MTU}
+		if state, err := readText(filepath.Join(sysRoot, "class/net", iface.Name, "operstate")); err == nil {
+			info.State = strings.TrimSpace(state)
+		}
+		if addresses, err := iface.Addrs(); err == nil {
+			for _, address := range addresses {
+				info.Addresses = append(info.Addresses, address.String())
+			}
+		}
+		result = append(result, info)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result
 }
 
 func readOSName(procRoot string) string {

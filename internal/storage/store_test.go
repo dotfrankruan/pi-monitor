@@ -37,12 +37,13 @@ func TestOpenMigratesOriginalSchema(t *testing.T) {
 	}
 	defer store.Close()
 	point := metrics.Sample{Timestamp: time.Now(), CPUCoreUsagePct: []float64{12, 34},
-		MemoryTotal: 1, DiskTotal: 1, Load1: 1, Load5: 2, Load15: 3}
+		MemoryTotal: 1, DiskTotal: 1, Load1: 1, Load5: 2, Load15: 3,
+		Network: map[string]metrics.NetworkSample{"eth0": {RXBytes: 100, TXBytes: 200}}}
 	if err := store.AddBatch(context.Background(), []metrics.Sample{point}); err != nil {
 		t.Fatalf("write after migration failed: %v", err)
 	}
 	got, err := store.Query(context.Background(), point.Timestamp.Add(-time.Second), point.Timestamp.Add(time.Second), 10)
-	if err != nil || len(got) != 1 || len(got[0].CPUCoreUsagePct) != 2 || got[0].Load15 != 3 {
+	if err != nil || len(got) != 1 || len(got[0].CPUCoreUsagePct) != 2 || got[0].Load15 != 3 || got[0].Network["eth0"].TXBytes != 200 {
 		t.Fatalf("unexpected migrated data: %+v, err=%v", got, err)
 	}
 }
@@ -57,8 +58,8 @@ func TestSQLiteParquetRoundTrip(t *testing.T) {
 	start := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	temp := 52.5
 	points := []metrics.Sample{
-		{Timestamp: start.Add(time.Second), CPUTempC: &temp, CPUCoreUsagePct: []float64{10, 20, 30, 40}, MemoryPct: 25, MemoryUsed: 1, MemoryTotal: 4, DiskPct: 10, DiskUsed: 1, DiskTotal: 10, Load1: 1, Load5: 2, Load15: 3},
-		{Timestamp: start.Add(2 * time.Second), CPUTempC: &temp, CPUCoreUsagePct: []float64{11, 21, 31, 41}, MemoryPct: 30, MemoryUsed: 1, MemoryTotal: 4, DiskPct: 10, DiskUsed: 1, DiskTotal: 10, Load1: 2, Load5: 3, Load15: 4},
+		{Timestamp: start.Add(time.Second), CPUTempC: &temp, CPUCoreUsagePct: []float64{10, 20, 30, 40}, MemoryPct: 25, MemoryUsed: 1, MemoryTotal: 4, DiskPct: 10, DiskUsed: 1, DiskTotal: 10, Load1: 1, Load5: 2, Load15: 3, Network: map[string]metrics.NetworkSample{"eth0": {RXBytes: 1000, TXBytes: 2000, RXBytesPerSec: 10, TXBytesPerSec: 20}}},
+		{Timestamp: start.Add(2 * time.Second), CPUTempC: &temp, CPUCoreUsagePct: []float64{11, 21, 31, 41}, MemoryPct: 30, MemoryUsed: 1, MemoryTotal: 4, DiskPct: 10, DiskUsed: 1, DiskTotal: 10, Load1: 2, Load5: 3, Load15: 4, Network: map[string]metrics.NetworkSample{"eth0": {RXBytes: 1010, TXBytes: 2020, RXBytesPerSec: 11, TXBytesPerSec: 21}}},
 	}
 	if err := store.AddBatch(context.Background(), points); err != nil {
 		t.Fatal(err)
@@ -86,5 +87,8 @@ func TestSQLiteParquetRoundTrip(t *testing.T) {
 	}
 	if len(got[0].CPUCoreUsagePct) != 4 || got[0].CPUCoreUsagePct[3] != 40 || got[0].Load15 != 3 {
 		t.Fatalf("per-core/load history was not preserved: %+v", got[0])
+	}
+	if got[0].Network["eth0"].RXBytes != 1000 || got[0].Network["eth0"].TXBytesPerSec != 20 {
+		t.Fatalf("network history was not preserved: %+v", got[0].Network)
 	}
 }

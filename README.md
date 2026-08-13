@@ -4,10 +4,15 @@ A small, self-contained Raspberry Pi monitoring service written in Go.
 
 It samples CPU temperature and frequency, total and per-core CPU usage, memory,
 disk, fan speed, optional NVMe temperature, 1/5/15-minute load averages and
-uptime every 500 ms. Recent samples remain in memory and are written to SQLite
+uptime every 500 ms. Every network interface is sampled for RX/TX totals and
+rates, while the dashboard lets the viewer choose which interface to graph.
+Recent samples remain in memory and are written to SQLite
 in batches. Completed weeks are compacted into Parquet files. The built-in web
 UI shows live values, system information, per-core tables and retro-style
 historical charts.
+
+The history toolbar includes high-resolution 1, 3 and 5 minute views as well as
+longer ranges from 15 minutes through 30 days.
 
 ## Quick start
 

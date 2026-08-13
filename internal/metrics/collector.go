@@ -18,24 +18,32 @@ import (
 
 // Sample is one point in the monitoring time series. Optional sensors are nil.
 type Sample struct {
-	Timestamp       time.Time `json:"timestamp" parquet:"timestamp,timestamp(millisecond)"`
-	CPUTempC        *float64  `json:"cpu_temp_c,omitempty" parquet:"cpu_temp_c,optional"`
-	CPUFreqMHz      *float64  `json:"cpu_freq_mhz,omitempty" parquet:"cpu_freq_mhz,optional"`
-	CPUUsagePct     *float64  `json:"cpu_usage_pct,omitempty" parquet:"cpu_usage_pct,optional"`
-	CPUCoreUsagePct []float64 `json:"cpu_core_usage_pct,omitempty" parquet:"cpu_core_usage_pct,list,optional"`
-	MemoryPct       float64   `json:"memory_pct" parquet:"memory_pct"`
-	MemoryUsed      uint64    `json:"memory_used_bytes" parquet:"memory_used_bytes"`
-	MemoryTotal     uint64    `json:"memory_total_bytes" parquet:"memory_total_bytes"`
-	DiskPct         float64   `json:"disk_pct" parquet:"disk_pct"`
-	DiskUsed        uint64    `json:"disk_used_bytes" parquet:"disk_used_bytes"`
-	DiskTotal       uint64    `json:"disk_total_bytes" parquet:"disk_total_bytes"`
-	FanRPM          *float64  `json:"fan_rpm,omitempty" parquet:"fan_rpm,optional"`
-	FanPWMPct       *float64  `json:"fan_pwm_pct,omitempty" parquet:"fan_pwm_pct,optional"`
-	NVMeTempC       *float64  `json:"nvme_temp_c,omitempty" parquet:"nvme_temp_c,optional"`
-	Load1           float64   `json:"load_1" parquet:"load_1"`
-	Load5           float64   `json:"load_5" parquet:"load_5"`
-	Load15          float64   `json:"load_15" parquet:"load_15"`
-	UptimeSec       float64   `json:"uptime_seconds" parquet:"uptime_seconds"`
+	Timestamp       time.Time                `json:"timestamp" parquet:"timestamp,timestamp(millisecond)"`
+	CPUTempC        *float64                 `json:"cpu_temp_c,omitempty" parquet:"cpu_temp_c,optional"`
+	CPUFreqMHz      *float64                 `json:"cpu_freq_mhz,omitempty" parquet:"cpu_freq_mhz,optional"`
+	CPUUsagePct     *float64                 `json:"cpu_usage_pct,omitempty" parquet:"cpu_usage_pct,optional"`
+	CPUCoreUsagePct []float64                `json:"cpu_core_usage_pct,omitempty" parquet:"cpu_core_usage_pct,list,optional"`
+	MemoryPct       float64                  `json:"memory_pct" parquet:"memory_pct"`
+	MemoryUsed      uint64                   `json:"memory_used_bytes" parquet:"memory_used_bytes"`
+	MemoryTotal     uint64                   `json:"memory_total_bytes" parquet:"memory_total_bytes"`
+	DiskPct         float64                  `json:"disk_pct" parquet:"disk_pct"`
+	DiskUsed        uint64                   `json:"disk_used_bytes" parquet:"disk_used_bytes"`
+	DiskTotal       uint64                   `json:"disk_total_bytes" parquet:"disk_total_bytes"`
+	FanRPM          *float64                 `json:"fan_rpm,omitempty" parquet:"fan_rpm,optional"`
+	FanPWMPct       *float64                 `json:"fan_pwm_pct,omitempty" parquet:"fan_pwm_pct,optional"`
+	NVMeTempC       *float64                 `json:"nvme_temp_c,omitempty" parquet:"nvme_temp_c,optional"`
+	Load1           float64                  `json:"load_1" parquet:"load_1"`
+	Load5           float64                  `json:"load_5" parquet:"load_5"`
+	Load15          float64                  `json:"load_15" parquet:"load_15"`
+	UptimeSec       float64                  `json:"uptime_seconds" parquet:"uptime_seconds"`
+	Network         map[string]NetworkSample `json:"network,omitempty" parquet:"network"`
+}
+
+type NetworkSample struct {
+	RXBytes       uint64  `json:"rx_bytes" parquet:"rx_bytes"`
+	TXBytes       uint64  `json:"tx_bytes" parquet:"tx_bytes"`
+	RXBytesPerSec float64 `json:"rx_bytes_per_sec" parquet:"rx_bytes_per_sec"`
+	TXBytesPerSec float64 `json:"tx_bytes_per_sec" parquet:"tx_bytes_per_sec"`
 }
 
 func (s Sample) MarshalJSON() ([]byte, error) {
@@ -47,6 +55,7 @@ func (s Sample) MarshalJSON() ([]byte, error) {
 }
 
 type cpuTimes struct{ idle, total uint64 }
+type networkCounters struct{ rx, tx uint64 }
 
 type Collector struct {
 	procRoot string
@@ -59,8 +68,10 @@ type Collector struct {
 	fanPWMPath   string
 	freqPaths    []string
 
-	mu       sync.Mutex
-	previous map[string]cpuTimes
+	mu                sync.Mutex
+	previous          map[string]cpuTimes
+	previousNetwork   map[string]networkCounters
+	previousNetworkAt time.Time
 }
 
 func NewCollector(procRoot, sysRoot, diskPath string) *Collector {
@@ -156,10 +167,37 @@ func (c *Collector) Collect(ctx context.Context) (Sample, error) {
 	if v, err := firstNumber(filepath.Join(c.procRoot, "uptime")); err == nil {
 		s.UptimeSec = v
 	}
+	s.Network = c.networkStats(s.Timestamp)
 
 	// Optional sensors are allowed to be absent. Core memory and disk failures
 	// are returned while the partially collected sample remains useful.
 	return s, errors.Join(problems...)
+}
+
+func (c *Collector) networkStats(now time.Time) map[string]NetworkSample {
+	directories, _ := filepath.Glob(filepath.Join(c.sysRoot, "class/net/*"))
+	current := make(map[string]networkCounters, len(directories))
+	for _, directory := range directories {
+		rx, rxErr := readUint(filepath.Join(directory, "statistics/rx_bytes"))
+		tx, txErr := readUint(filepath.Join(directory, "statistics/tx_bytes"))
+		if rxErr == nil && txErr == nil {
+			current[filepath.Base(directory)] = networkCounters{rx: rx, tx: tx}
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	elapsed := now.Sub(c.previousNetworkAt).Seconds()
+	result := make(map[string]NetworkSample, len(current))
+	for name, counters := range current {
+		point := NetworkSample{RXBytes: counters.rx, TXBytes: counters.tx}
+		if previous, ok := c.previousNetwork[name]; ok && elapsed > 0 && counters.rx >= previous.rx && counters.tx >= previous.tx {
+			point.RXBytesPerSec = float64(counters.rx-previous.rx) / elapsed
+			point.TXBytesPerSec = float64(counters.tx-previous.tx) / elapsed
+		}
+		result[name] = point
+	}
+	c.previousNetwork, c.previousNetworkAt = current, now
+	return result
 }
 
 func (c *Collector) cpuFrequency() (float64, error) {
@@ -313,6 +351,14 @@ func firstNumber(path string) (float64, error) {
 		return 0, err
 	}
 	return values[0], nil
+}
+
+func readUint(path string) (uint64, error) {
+	text, err := readText(path)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimSpace(text), 10, 64)
 }
 
 func firstNumbers(path string, count int) ([]float64, error) {
