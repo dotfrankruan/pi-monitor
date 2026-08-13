@@ -13,8 +13,9 @@ import (
 )
 
 type Config struct {
-	SampleInterval time.Duration
-	FlushInterval  time.Duration
+	SampleInterval      time.Duration
+	FlushInterval       time.Duration
+	PersistenceInterval time.Duration
 }
 
 type Monitor struct {
@@ -35,8 +36,8 @@ func New(collector *metrics.Collector, store *storage.Store, config Config, logg
 }
 
 func (m *Monitor) Run(ctx context.Context) error {
-	if m.config.SampleInterval <= 0 || m.config.FlushInterval <= 0 {
-		return errors.New("sample and flush intervals must be positive")
+	if m.config.SampleInterval <= 0 || m.config.FlushInterval <= 0 || m.config.PersistenceInterval <= 0 {
+		return errors.New("sample, flush and persistence intervals must be positive")
 	}
 	if names, err := m.store.ArchiveCompletedWeeks(ctx, time.Now()); err != nil {
 		m.log.Error("initial weekly archive failed", "error", err)
@@ -115,13 +116,14 @@ func (m *Monitor) Flush(ctx context.Context) error {
 	if len(batch) == 0 {
 		return nil
 	}
-	if err := m.store.AddBatch(ctx, batch); err != nil {
+	stored := storage.CompactByInterval(batch, m.config.PersistenceInterval)
+	if err := m.store.AddBatch(ctx, stored); err != nil {
 		m.mu.Lock()
 		m.pending = append(batch, m.pending...)
 		m.mu.Unlock()
 		return err
 	}
-	m.log.Info("flushed samples to SQLite", "count", len(batch))
+	m.log.Info("flushed samples to SQLite", "collected", len(batch), "stored", len(stored))
 	return nil
 }
 

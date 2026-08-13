@@ -19,6 +19,7 @@ import (
 // Sample is one point in the monitoring time series. Optional sensors are nil.
 type Sample struct {
 	Timestamp       time.Time                `json:"timestamp" parquet:"timestamp,timestamp(millisecond)"`
+	Representative  bool                     `json:"is_representative" parquet:"is_representative"`
 	CPUTempC        *float64                 `json:"cpu_temp_c,omitempty" parquet:"cpu_temp_c,optional"`
 	CPUFreqMHz      *float64                 `json:"cpu_freq_mhz,omitempty" parquet:"cpu_freq_mhz,optional"`
 	CPUUsagePct     *float64                 `json:"cpu_usage_pct,omitempty" parquet:"cpu_usage_pct,optional"`
