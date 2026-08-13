@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FRANKPI // SYSTEM MONITOR</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div><span class="prompt">root@frankpi:~$</span> ./system-monitor</div>
+    <div id="status" class="status waiting">● CONNECTING</div>
+  </header>
+
+  <main>
+    <section id="cards" class="cards">
+      <article><label>CPU TEMP</label><strong id="cpu-temp">--</strong><small>°C</small></article>
+      <article><label>CPU FREQ</label><strong id="cpu-freq">--</strong><small>MHz</small></article>
+      <article><label>CPU LOAD</label><strong id="cpu-usage">--</strong><small>%</small></article>
+      <article><label>MEMORY</label><strong id="memory">--</strong><small>%</small></article>
+      <article><label>ROOT DISK</label><strong id="disk">--</strong><small>%</small></article>
+      <article><label>FAN</label><strong id="fan">--</strong><small>RPM</small></article>
+      <article><label>NVME TEMP</label><strong id="nvme-temp">--</strong><small>°C</small></article>
+      <article><label>UPTIME</label><strong id="uptime">--</strong><small>days</small></article>
+    </section>
+
+    <section class="toolbar">
+      <div>
+        <button data-range="15m">15 MIN</button>
+        <button data-range="1h" class="active">1 HOUR</button>
+        <button data-range="6h">6 HOURS</button>
+        <button data-range="24h">24 HOURS</button>
+        <button data-range="168h">7 DAYS</button>
+        <button data-range="720h">30 DAYS</button>
+      </div>
+      <span id="last-update">NO DATA</span>
+    </section>
+
+    <section class="charts">
+      <article><h2>THERMALS <span>°C</span></h2><canvas id="thermal-chart"></canvas></article>
+      <article><h2>CPU <span>% / MHz÷100</span></h2><canvas id="cpu-chart"></canvas></article>
+      <article><h2>UTILIZATION <span>%</span></h2><canvas id="usage-chart"></canvas></article>
+      <article><h2>COOLING <span>RPM</span></h2><canvas id="fan-chart"></canvas></article>
+    </section>
+  </main>
+
+  <footer>PI MONITOR // 500ms TELEMETRY // SQLITE + PARQUET ARCHIVE</footer>
+  <script src="/app.js"></script>
+</body>
+</html>

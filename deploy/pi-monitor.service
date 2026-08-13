@@ -1,0 +1,20 @@
+[Unit]
+Description=Raspberry Pi system monitor
+After=network.target
+
+[Service]
+Type=simple
+User=frank
+Group=frank
+WorkingDirectory=/opt/pi-monitor
+ExecStart=/opt/pi-monitor/pi-monitor -listen 0.0.0.0:49152 -data-dir /var/lib/pi-monitor -sample-interval 500ms -flush-interval 1h
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pi-monitor
+
+[Install]
+WantedBy=multi-user.target
